@@ -107,7 +107,7 @@ where
         debug_assert!(size.is_power_of_two());
 
         let table: Result<Vec<_>, _> = (0..size)
-            .into_par_iter()
+            .into_iter()
             .map(|i| {
                 // account for signedness to determine input pixel value
                 let x = if signed && i >= size / 2 {
