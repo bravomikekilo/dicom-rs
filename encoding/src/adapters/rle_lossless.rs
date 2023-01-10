@@ -44,8 +44,9 @@ impl PixelRWAdapter for RLELosslessAdapter {
                 .whatever_context("Invalid pixel data, no fragments found")? as usize;
         let bytes_per_sample = bits_allocated / 8;
         // `stride` it the total number of bytes for each sample plane
-        let stride = bytes_per_sample * cols * rows;
-        dst.resize((samples_per_pixel * stride) as usize * nr_frames, 0);
+        let stride: usize = bytes_per_sample as usize * cols as usize * rows as usize;
+        let frame_size = samples_per_pixel as usize * stride;
+        dst.resize(frame_size * nr_frames, 0);
 
         // RLE encoded data is ordered like this (for 16-bit, 3 sample):
         //  Segment: 0     | 1     | 2     | 3     | 4     | 5
@@ -74,20 +75,23 @@ impl PixelRWAdapter for RLELosslessAdapter {
                     let segment = &fragment
                         [offsets[ii as usize] as usize..offsets[(ii + 1) as usize] as usize];
                     let buff = io::Cursor::new(segment);
-                    let (_, mut decoder) = PackBitsReader::new(buff, segment.len())
+                    let mut decoded_segment: Vec<u8> = vec![0; rows as usize * cols as usize];
+                    let decode_length = decode_rle_segment(buff, &mut decoded_segment)
                         .map_err(|e| Box::new(e) as Box<_>)
                         .whatever_context("Failed to read RLE segments")?;
-                    let mut decoded_segment: Vec<u8> = vec![0; (rows * cols) as usize];
-                    decoder.read_exact(&mut decoded_segment).unwrap();
+
+                    assert_eq!(decode_length, decoded_segment.len());
 
                     // Interleave pixels as described in the example above
                     let byte_offset = bytes_per_sample - byte_offset - 1;
-                    let start = (samples_per_pixel as usize * stride as usize * i)
-                        + byte_offset as usize
-                        + (sample_number * stride) as usize;
-                    let end = start + stride as usize;
+                    let sample_offset = (sample_number * bytes_per_sample) as usize;
+
+                    let start = frame_size * i
+                        + sample_offset
+                        + byte_offset as usize;
+                    let end = frame_size * (i + 1);
                     for (decoded_index, dst_index) in
-                        (start..end).step_by(bytes_per_sample as usize).enumerate()
+                        (start..end).step_by(bytes_per_sample as usize * samples_per_pixel as usize).enumerate()
                     {
                         dst[dst_index] = decoded_segment[decoded_index];
                     }
@@ -106,6 +110,32 @@ fn read_rle_header(fragment: &[u8]) -> Vec<u32> {
     let mut offsets = vec![0; nr_segments as usize];
     LittleEndian::read_u32_into(&fragment[4..4 * (nr_segments + 1) as usize], &mut offsets);
     offsets
+}
+
+fn decode_rle_segment<R: Read + Seek>(mut reader: R, target_buffer: &mut Vec<u8>) -> io::Result<usize> {
+    let mut pos: usize = 0;
+    let mut header: [u8; 1] = [0];
+    let mut data: [u8; 1] = [0];
+    while pos < target_buffer.len() {
+        reader.read_exact(&mut header)?;
+        let h = header[0] as i8;
+        if (-127..=-1).contains(&h) {
+            let new_pos = pos + (1 - h as isize) as usize;
+            reader.read_exact(&mut data)?;
+            for i in pos .. new_pos {
+                target_buffer[i] = data[0];
+            }
+            pos = new_pos;
+        } else if h >= 0 {
+            let num_vals = h as usize + 1;
+            reader.read_exact(&mut target_buffer[pos..pos + num_vals])?;
+            pos += num_vals;
+        } else {
+            // h = -128 is a no-op.
+        }
+    }
+    Ok(pos)
+
 }
 
 /// PackBits Reader from the image-tiff crate
