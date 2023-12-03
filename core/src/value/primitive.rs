@@ -964,7 +964,8 @@ impl PrimitiveValue {
     {
         match self {
             PrimitiveValue::Str(s) => {
-                s.trim_end()
+                s.trim_start()
+                    .trim_end_matches(|c: char| c == '\0' || c.is_whitespace())
                     .parse()
                     .context(ParseIntegerSnafu)
                     .map_err(|err| ConvertValueError {
@@ -974,7 +975,8 @@ impl PrimitiveValue {
                     })
             }
             PrimitiveValue::Strs(s) if !s.is_empty() => s[0]
-                .trim_end()
+                .trim_start()
+                .trim_end_matches(|c: char| c == '\0' || c.is_whitespace())
                 .parse()
                 .context(ParseIntegerSnafu)
                 .map_err(|err| ConvertValueError {
